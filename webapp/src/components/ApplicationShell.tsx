@@ -22,7 +22,7 @@ import { atom, useAtom } from "jotai";
 import { Project } from "@prisma/client";
 import { useRouter } from "next/router";
 
-const publicRoutes = ["/sign-up", "/sign-in"];
+const publicRoutes = ["/sign-up", "/sign-in", "/register-user"];
 
 export const projectAtom = atom<Project | null>(null);
 
@@ -237,3 +237,4 @@ export default function ApplicationShell({
     </>
   );
 }
+

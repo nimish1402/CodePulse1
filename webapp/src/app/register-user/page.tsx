@@ -3,7 +3,7 @@ import { auth, clerkClient } from "@clerk/nextjs";
 import { redirect } from "next/navigation";
 
 const RegisterUser = async () => {
-  const { userId } = auth();
+  const { userId } = await auth();
   if (!userId) {
     return redirect("/sign-up");
   }
