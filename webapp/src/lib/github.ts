@@ -68,16 +68,20 @@ export const pollRepo = async (githubUrl: string, projectId: string) => {
       return summary.value.data.summary as string;
     }
   });
-  const commits = await db.commit.createMany({
-    data: summaries.map((summary, idx) => ({
-      projectId: projectId,
-      commitHash: unprocessedCommits[idx]!.commitHash,
-      summary: summary!,
-      commitAuthorName: unprocessedCommits[idx]!.commitAuthorName,
-      commitDate: unprocessedCommits[idx]!.commitDate,
-      commitMessage: unprocessedCommits[idx]!.commitMessage,
-      commitAuthorAvatar: unprocessedCommits[idx]!.commitAuthorAvatar,
-    })),
-  });
+  const commits = await Promise.all(
+    summaries.map((summary, idx) =>
+      db.commit.create({
+        data: {
+          projectId: projectId,
+          commitHash: unprocessedCommits[idx]!.commitHash,
+          summary: summary!,
+          commitAuthorName: unprocessedCommits[idx]!.commitAuthorName,
+          commitDate: new Date(unprocessedCommits[idx]!.commitDate),
+          commitMessage: unprocessedCommits[idx]!.commitMessage,
+          commitAuthorAvatar: unprocessedCommits[idx]!.commitAuthorAvatar,
+        },
+      })
+    )
+  );
   return commits;
 };

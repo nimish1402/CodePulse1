@@ -1,6 +1,8 @@
 from git import Repo
 from langchain.document_loaders import GitLoader
 import os
+import shutil
+import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,10 +24,8 @@ class GithubLoader:
         """
 
     def load(self, url: str):
-        tmp_path = f"/tmp/github_repo"
-        # remove the folder if it exists
-        if os.path.exists(tmp_path):
-            os.system(f"rm -rf {tmp_path}")
+        # Use a unique temporary directory for each clone
+        tmp_path = tempfile.mkdtemp(prefix="github_repo_")
         repo = Repo.clone_from(
             url,
             to_path=tmp_path,
