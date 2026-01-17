@@ -9,11 +9,13 @@ load_dotenv()
 # Configure Gemini API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Initialize Weaviate client (optional for now)
+# Initialize Weaviate client
 try:
     import weaviate
+    from weaviate.classes.config import Configure, Property, DataType
+    
     client = weaviate.connect_to_weaviate_cloud(
-        cluster_url="https://asia-southeast1-gcp-free.weaviate.cloud",
+        cluster_url="https://u7qjbxmmtgss410vjv5pa.c0.asia-southeast1.gcp.weaviate.cloud",
         auth_credentials=weaviate.auth.AuthApiKey(os.getenv("WEAVIATE_API_KEY")),
     )
     weaviate_available = True
@@ -24,30 +26,154 @@ except Exception as e:
     client = None
 
 
+def ensure_collection_exists(namespace: str):
+    """
+    Ensure the Weaviate collection exists for the given namespace (repository)
+    """
+    if not weaviate_available or client is None:
+        print("Weaviate not available, skipping collection creation")
+        return False
+    
+    try:
+        collection_name = f"CodeDoc_{namespace.replace('-', '_').replace('/', '_')}"
+        
+        # Check if collection exists
+        if client.collections.exists(collection_name):
+            print(f"Collection {collection_name} already exists")
+            return True
+        
+        # Create collection with proper schema
+        client.collections.create(
+            name=collection_name,
+            properties=[
+                Property(name="source", data_type=DataType.TEXT),
+                Property(name="content", data_type=DataType.TEXT),
+                Property(name="summary", data_type=DataType.TEXT),
+            ],
+            # Configure vectorizer to use custom embeddings
+            vectorizer_config=Configure.Vectorizer.none(),
+        )
+        print(f"Created collection: {collection_name}")
+        return True
+    except Exception as e:
+        print(f"Error creating collection: {e}")
+        return False
+
+
+async def store_embeddings(documents: list, namespace: str):
+    """
+    Store document embeddings in Weaviate
+    documents: list of documents with metadata including 'source', 'content', 'summary', and 'embedding'
+    namespace: repository identifier
+    """
+    if not weaviate_available or client is None:
+        print("Weaviate not available, skipping embedding storage")
+        return False
+    
+    try:
+        collection_name = f"CodeDoc_{namespace.replace('-', '_').replace('/', '_')}"
+        collection = client.collections.get(collection_name)
+        
+        # Delete existing documents for this namespace (fresh start)
+        try:
+            collection.data.delete_many(where=None)
+            print(f"Cleared existing documents from {collection_name}")
+        except Exception as e:
+            print(f"Note: Could not clear collection (might be empty): {e}")
+        
+        # Batch insert documents
+        with collection.batch.dynamic() as batch:
+            for doc in documents:
+                batch.add_object(
+                    properties={
+                        "source": doc.get("source", ""),
+                        "content": doc.get("content", "")[:10000],  # Limit content size
+                        "summary": doc.get("summary", ""),
+                    },
+                    vector=doc.get("embedding", [])
+                )
+        
+        print(f"Stored {len(documents)} documents in Weaviate")
+        return True
+    except Exception as e:
+        print(f"Error storing embeddings: {e}")
+        return False
+
+
+async def retrieve_relevant_docs(query: str, namespace: str, limit: int = 5):
+    """
+    Retrieve relevant documents from Weaviate using vector similarity search
+    """
+    if not weaviate_available or client is None:
+        print("Weaviate not available, cannot retrieve documents")
+        return []
+    
+    try:
+        collection_name = f"CodeDoc_{namespace.replace('-', '_').replace('/', '_')}"
+        
+        # Check if collection exists
+        if not client.collections.exists(collection_name):
+            print(f"Collection {collection_name} does not exist")
+            return []
+        
+        # Get query embedding - this may raise QUOTA_EXCEEDED
+        query_embedding = await getEmbeddings(query)
+        
+        # Search for similar documents
+        collection = client.collections.get(collection_name)
+        results = collection.query.near_vector(
+            near_vector=query_embedding,
+            limit=limit,
+            return_properties=["source", "content", "summary"]
+        )
+        
+        # Extract documents
+        docs = []
+        for item in results.objects:
+            docs.append({
+                "source": item.properties.get("source", ""),
+                "content": item.properties.get("content", ""),
+                "summary": item.properties.get("summary", ""),
+            })
+        
+        print(f"Retrieved {len(docs)} relevant documents")
+        return docs
+    except Exception as e:
+        if "QUOTA_EXCEEDED" in str(e):
+            # Re-raise quota errors so ask() can handle them
+            raise
+        print(f"Error retrieving documents: {e}")
+        return []
+
+
 async def getEmbeddings(text: str) -> List[float]:
     """
     Get embeddings for the given text using Gemini's embedding model
     """
     try:
-        # Use Gemini's embedding model
-        model = genai.GenerativeModel('embedding-001')
-        
+        # Use Gemini's most basic embedding model (text-embedding-004)
         # Clean the text
         cleaned_text = text.replace("\n", " ").strip()
         
-        # Generate embeddings
+        # Generate embeddings using the basic model
         result = await asyncio.to_thread(
             genai.embed_content,
-            model="models/embedding-001",
+            model="models/text-embedding-004",
             content=cleaned_text,
             task_type="retrieval_document"
         )
         
         return result['embedding']
     except Exception as e:
-        print(f"Error getting embeddings: {e}")
-        # Return a default embedding vector if there's an error
-        return [0.0] * 768  # Standard embedding dimension
+        error_str = str(e)
+        if "quota" in error_str.lower() or "429" in error_str:
+            print(f"⚠️ Gemini API quota exceeded: {e}")
+            # Raise a specific exception for quota errors
+            raise Exception("QUOTA_EXCEEDED") from e
+        else:
+            print(f"Error getting embeddings: {e}")
+            # Return a default embedding vector for other errors
+            return [0.0] * 768  # Standard embedding dimension
 
 
 async def getSummary(source: str, code: str) -> str:
@@ -59,7 +185,7 @@ async def getSummary(source: str, code: str) -> str:
         code = code[:10000]
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')  # Gemini 2.5 Flash - has quota
         
         prompt = f"""You are an intelligent senior software engineer who specialise in onboarding junior software engineers onto projects.
 
@@ -84,37 +210,113 @@ give a summary no more than 100 words of the code above"""
 
 async def ask(query: str, namespace: str) -> str:
     """
-    Answer questions about the codebase using Gemini
-    Note: Simplified version without vector search for now
+    Answer questions about the codebase using Gemini with context from Weaviate
     """
     try:
-        print("asking", query)
+        print(f"Asking: {query} for namespace: {namespace}")
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Try to retrieve relevant documents from Weaviate
+        relevant_docs = []
+        quota_exceeded = False
+        try:
+            relevant_docs = await retrieve_relevant_docs(query, namespace, limit=5)
+        except Exception as retrieval_error:
+            if "QUOTA_EXCEEDED" in str(retrieval_error):
+                print("⚠️ Embedding quota exceeded, proceeding without context")
+                quota_exceeded = True
+            else:
+                raise  # Re-raise other errors
         
-        prompt = f"""
-AI assistant is a brand new, powerful, human-like artificial intelligence.
-The traits of AI include expert knowledge, helpfulness, cleverness, and articulateness.
-AI is a well-behaved and well-mannered individual.
-AI will answer all questions in the HTML format. including code snippets, proper HTML formatting
-AI is always friendly, kind, and inspiring, and he is eager to provide vivid and thoughtful responses to the user.
-AI has the sum of all knowledge in their brain, and is able to accurately answer nearly any question about any topic in conversation.
+        model = genai.GenerativeModel('gemini-2.5-flash')  # Gemini 2.5 Flash - has quota
+        
+        # Build context from retrieved documents
+        context = ""
+        if quota_exceeded:
+            context = """⚠️ Note: The Gemini API embedding quota has been exceeded. I cannot retrieve specific code context at this moment, but I'll provide a general answer.
 
-User question: {query}
+To restore full functionality:
+- Wait for the quota to reset (typically per minute/hour/day limits)
+- Consider upgrading your Gemini API plan for higher quotas
+- Visit: https://ai.google.dev/gemini-api/docs/rate-limits
 
-Note: This is a simplified response as the vector database integration is being updated. 
-Please provide a general answer based on your knowledge about software development and the query context."""
+For now, I'll provide a general answer based on common software development practices.
+
+"""
+        elif relevant_docs:
+            context = "Here is relevant code context from the repository:\n\n"
+            for i, doc in enumerate(relevant_docs, 1):
+                context += f"--- File: {doc['source']} ---\n"
+                context += f"Summary: {doc['summary']}\n"
+                context += f"Content:\n{doc['content'][:2000]}\n\n"  # Limit content to avoid token limits
+        else:
+            if not weaviate_available:
+                context = """Note: The vector database (Weaviate) is currently not available. This might be due to:
+- Network connectivity issues
+- Incorrect Weaviate cluster URL
+- Missing or invalid WEAVIATE_API_KEY
+
+To enable full context-aware Q&A functionality, please:
+1. Verify your Weaviate cluster URL in _gemini.py
+2. Check your WEAVIATE_API_KEY in the .env file
+3. Ensure you have network access to the Weaviate cloud instance
+
+For now, I'll provide a general answer based on common software development practices.
+
+"""
+            else:
+                context = "Note: No specific code context was found in the vector database. The repository might not have been indexed yet.\n\n"
+        
+        prompt = f"""You are Dionysus, an intelligent AI assistant specialized in helping developers understand codebases.
+
+You have access to a specific codebase and should answer questions based on the actual code context provided below.
+
+{context}
+
+User Question: {query}
+
+Instructions:
+- Answer the question based on the code context provided above
+- If the context contains relevant information, use it to provide specific, accurate answers
+- Include file names and code snippets when relevant
+- Format your response in HTML with proper tags for readability
+- If you cannot find relevant information in the context, say so honestly and provide general guidance
+- Be helpful, clear, and concise
+
+Answer:"""
 
         response = await asyncio.to_thread(
             model.generate_content,
             prompt
         )
         
-        print("got back answer")
+        print("Got back answer from Gemini")
         return response.text
     except Exception as e:
+        error_str = str(e)
         print(f"Error answering query: {e}")
-        return "I'm sorry, but I encountered an error while processing your question."
+        import traceback
+        traceback.print_exc()
+        
+        # Provide more specific error messages
+        if "quota" in error_str.lower() or "429" in error_str:
+            return """<div style="padding: 20px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
+<h3>⚠️ API Quota Exceeded</h3>
+<p>I'm currently unable to process your question because the Gemini API quota has been exceeded.</p>
+<p><strong>What this means:</strong> The free tier of Gemini API has limits on requests per minute/hour/day.</p>
+<p><strong>Solutions:</strong></p>
+<ul>
+<li>Wait a few minutes and try again</li>
+<li>Check your quota at: <a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank">Gemini API Rate Limits</a></li>
+<li>Consider upgrading your API plan for higher quotas</li>
+</ul>
+</div>"""
+        elif "api" in error_str.lower() and "key" in error_str.lower():
+            return """<div style="padding: 20px; background-color: #f8d7da; border-left: 4px solid #dc3545;">
+<h3>❌ API Key Error</h3>
+<p>There seems to be an issue with the Gemini API key. Please check that your GEMINI_API_KEY is correctly set in the .env file.</p>
+</div>"""
+        else:
+            return "I'm sorry, but I encountered an error while processing your question. Please try again or contact support if the issue persists."
 
 
 def summarise_commit(diff: str) -> str:
@@ -122,7 +324,7 @@ def summarise_commit(diff: str) -> str:
     Summarize a git commit diff using Gemini
     """
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')  # Gemini 2.5 Flash - has quota
         
         prompt = f"""You are an expert programmer, and you are trying to summarize a git diff.
 Reminders about the git diff format:
