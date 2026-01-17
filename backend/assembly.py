@@ -69,7 +69,7 @@ async def transcribe_file(url):
 async def ask_meeting(url, query, quote):
     # Simplified version for testing - TODO: implement full vector search
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-flash-latest')
         
         prompt = f"""
 AI assistant is a brand new, powerful, human-like artificial intelligence.

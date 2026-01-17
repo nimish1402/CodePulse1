@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from GithubLoader import GithubLoader
 import hashlib
-from _gemini import getSummary, getEmbeddings, ask, summarise_commit
+from _gemini import getSummary, getEmbeddings, ask, summarise_commit, ensure_collection_exists, store_embeddings
 from assembly import transcribe_file, ask_meeting
 
 load_dotenv()
@@ -61,9 +61,27 @@ async def generate_documentation(body: GenerateDocumentationRequest):
         doc.metadata["embedding"] = embeddings[i]
     print("got embeddings")
 
-    # TODO: Store embeddings in vector database
-    # For now, we'll skip the vector storage and generate documentation directly
+    # Store embeddings in Weaviate vector database
+    namespace = serialise_github_url(body.github_url)
     
+    # Ensure collection exists
+    ensure_collection_exists(namespace)
+    
+    # Prepare documents for storage
+    documents_to_store = []
+    for doc in raw_documents:
+        documents_to_store.append({
+            "source": doc.metadata["source"],
+            "content": doc.page_content,
+            "summary": doc.metadata["summary"],
+            "embedding": doc.metadata["embedding"]
+        })
+    
+    # Store in Weaviate
+    await store_embeddings(documents_to_store, namespace)
+    print(f"Stored {len(documents_to_store)} documents in Weaviate")
+    
+
     questions = [
         "What is the project about?",
         "How can I get started with this project?",
