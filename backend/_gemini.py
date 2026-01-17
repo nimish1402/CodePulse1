@@ -9,6 +9,17 @@ load_dotenv()
 # Configure Gemini API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
+# Initialize Groq client
+try:
+    from groq import Groq
+    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    groq_available = True
+    print("Groq client initialized successfully")
+except Exception as e:
+    print(f"Warning: Groq not available: {e}")
+    groq_available = False
+    groq_client = None
+
 # Initialize Weaviate client
 try:
     import weaviate
@@ -178,14 +189,15 @@ async def getEmbeddings(text: str) -> List[float]:
 
 async def getSummary(source: str, code: str) -> str:
     """
-    Generate a summary of the code file using Gemini
+    Generate a summary of the code file using Groq (for documentation)
     """
     print("getting summary for", source)
     if len(code) > 10000:
         code = code[:10000]
     
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')  # Gemini 2.5 Flash - has quota
+        if not groq_available or groq_client is None:
+            raise Exception("Groq not available")
         
         prompt = f"""You are an intelligent senior software engineer who specialise in onboarding junior software engineers onto projects.
 
@@ -197,12 +209,15 @@ here is the code:
 give a summary no more than 100 words of the code above"""
 
         response = await asyncio.to_thread(
-            model.generate_content,
-            prompt
+            groq_client.chat.completions.create,
+            model="llama-3.3-70b-versatile",  # Fast and capable model
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=150
         )
         
-        print("got back summary", source)
-        return response.text
+        print("got back summary from Groq", source)
+        return response.choices[0].message.content
     except Exception as e:
         print(f"Error getting summary for {source}: {e}")
         return f"Unable to generate summary for {source}"
@@ -210,7 +225,7 @@ give a summary no more than 100 words of the code above"""
 
 async def ask(query: str, namespace: str) -> str:
     """
-    Answer questions about the codebase using Gemini with context from Weaviate
+    Answer questions about the codebase using Gemini (with Groq failsafe)
     """
     try:
         print(f"Asking: {query} for namespace: {namespace}")
@@ -227,8 +242,6 @@ async def ask(query: str, namespace: str) -> str:
             else:
                 raise  # Re-raise other errors
         
-        model = genai.GenerativeModel('gemini-2.5-flash')  # Gemini 2.5 Flash - has quota
-        
         # Build context from retrieved documents
         context = ""
         if quota_exceeded:
@@ -243,11 +256,11 @@ For now, I'll provide a general answer based on common software development prac
 
 """
         elif relevant_docs:
-            context = "Here is relevant code context from the repository:\n\n"
+            context = "Here is relevant code context from the repository:\\n\\n"
             for i, doc in enumerate(relevant_docs, 1):
-                context += f"--- File: {doc['source']} ---\n"
-                context += f"Summary: {doc['summary']}\n"
-                context += f"Content:\n{doc['content'][:2000]}\n\n"  # Limit content to avoid token limits
+                context += f"--- File: {doc['source']} ---\\n"
+                context += f"Summary: {doc['summary']}\\n"
+                context += f"Content:\\n{doc['content'][:2000]}\\n\\n"  # Limit content to avoid token limits
         else:
             if not weaviate_available:
                 context = """Note: The vector database (Weaviate) is currently not available. This might be due to:
@@ -264,7 +277,7 @@ For now, I'll provide a general answer based on common software development prac
 
 """
             else:
-                context = "Note: No specific code context was found in the vector database. The repository might not have been indexed yet.\n\n"
+                context = "Note: No specific code context was found in the vector database. The repository might not have been indexed yet.\\n\\n"
         
         prompt = f"""You are Dionysus, an intelligent AI assistant specialized in helping developers understand codebases.
 
@@ -284,13 +297,41 @@ Instructions:
 
 Answer:"""
 
-        response = await asyncio.to_thread(
-            model.generate_content,
-            prompt
-        )
-        
-        print("Got back answer from Gemini")
-        return response.text
+        # Try Gemini first
+        try:
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            response = await asyncio.to_thread(
+                model.generate_content,
+                prompt
+            )
+            print("Got back answer from Gemini")
+            return response.text
+        except Exception as gemini_error:
+            error_str = str(gemini_error)
+            # If quota exceeded, fallback to Groq
+            if "quota" in error_str.lower() or "429" in error_str:
+                print("⚠️ Gemini quota exceeded, falling back to Groq")
+                if groq_available and groq_client is not None:
+                    response = await asyncio.to_thread(
+                        groq_client.chat.completions.create,
+                        model="llama-3.3-70b-versatile",
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.5,
+                        max_tokens=2000
+                    )
+                    print("Got back answer from Groq (failsafe)")
+                    # Add a note that Groq was used
+                    groq_answer = response.choices[0].message.content
+                    return f"""<div style="padding: 10px; background-color: #e8f5e9; border-left: 4px solid #4caf50; margin-bottom: 15px;">
+<small>ℹ️ <strong>Powered by Groq</strong> - Gemini quota exceeded, using Groq as failsafe</small>
+</div>
+
+{groq_answer}"""
+                else:
+                    raise  # Re-raise if Groq not available
+            else:
+                raise  # Re-raise non-quota errors
+                
     except Exception as e:
         error_str = str(e)
         print(f"Error answering query: {e}")
@@ -321,10 +362,11 @@ Answer:"""
 
 def summarise_commit(diff: str) -> str:
     """
-    Summarize a git commit diff using Gemini
+    Summarize a git commit diff using Groq (for documentation)
     """
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')  # Gemini 2.5 Flash - has quota
+        if not groq_available or groq_client is None:
+            raise Exception("Groq not available")
         
         prompt = f"""You are an expert programmer, and you are trying to summarize a git diff.
 Reminders about the git diff format:
@@ -360,8 +402,13 @@ Please summarise the following diff file:
 
 {diff}"""
 
-        response = model.generate_content(prompt)
-        return response.text
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=500
+        )
+        return response.choices[0].message.content
     except Exception as e:
         print(f"Error summarizing commit: {e}")
         return "Unable to summarize commit changes"
