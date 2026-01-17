@@ -45,11 +45,31 @@ async def generate_documentation(body: GenerateDocumentationRequest):
     file_tree = [i.metadata["source"] for i in raw_documents]
     mermaid_graph = generate_file_tree_graph(file_tree)
 
-    print("mermaid", mermaid_graph)
-    summaries = await asyncio.gather(
-        *[getSummary(doc.metadata["source"], doc.page_content) for doc in raw_documents]
-    )
-    # print(summaries)
+    print(f"Processing {len(raw_documents)} files from repository")
+    
+    # Process summaries in batches to avoid rate limits
+    BATCH_SIZE = 10
+    summaries = []
+    
+    for i in range(0, len(raw_documents), BATCH_SIZE):
+        batch = raw_documents[i:i + BATCH_SIZE]
+        batch_num = (i // BATCH_SIZE) + 1
+        total_batches = (len(raw_documents) + BATCH_SIZE - 1) // BATCH_SIZE
+        
+        print(f"Processing batch {batch_num}/{total_batches} ({len(batch)} files)...")
+        
+        batch_summaries = await asyncio.gather(
+            *[getSummary(doc.metadata["source"], doc.page_content) for doc in batch]
+        )
+        summaries.extend(batch_summaries)
+        
+        # Add delay between batches to respect rate limits (except for last batch)
+        if i + BATCH_SIZE < len(raw_documents):
+            print("Waiting 2 seconds before next batch...")
+            await asyncio.sleep(2)
+    
+    print(f"Generated {len(summaries)} summaries")
+    
     for i, doc in enumerate(raw_documents):
         doc.metadata["summary"] = summaries[i]
 

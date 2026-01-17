@@ -195,11 +195,15 @@ async def getSummary(source: str, code: str) -> str:
     if len(code) > 10000:
         code = code[:10000]
     
-    try:
-        if not groq_available or groq_client is None:
-            raise Exception("Groq not available")
-        
-        prompt = f"""You are an intelligent senior software engineer who specialise in onboarding junior software engineers onto projects.
+    max_retries = 3
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            if not groq_available or groq_client is None:
+                raise Exception("Groq not available")
+            
+            prompt = f"""You are an intelligent senior software engineer who specialise in onboarding junior software engineers onto projects.
 
 You are onboarding a junior software engineer and explaining to them the purpose of the {source} file
 here is the code:
@@ -208,19 +212,29 @@ here is the code:
 ---
 give a summary no more than 100 words of the code above"""
 
-        response = await asyncio.to_thread(
-            groq_client.chat.completions.create,
-            model="llama-3.3-70b-versatile",  # Fast and capable model
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=150
-        )
-        
-        print("got back summary from Groq", source)
-        return response.choices[0].message.content
-    except Exception as e:
-        print(f"Error getting summary for {source}: {e}")
-        return f"Unable to generate summary for {source}"
+            response = await asyncio.to_thread(
+                groq_client.chat.completions.create,
+                model="llama-3.1-8b-instant",  # Lighter, faster model
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=150
+            )
+            
+            print("got back summary from Groq", source)
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            error_str = str(e)
+            if "rate_limit" in error_str.lower() or "429" in error_str:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    print(f"⚠️ Rate limit for {source}, retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    continue
+            print(f"Error getting summary for {source}: {e}")
+            return f"Unable to generate summary for {source}"
+    
+    return f"Unable to generate summary for {source}"
 
 
 async def ask(query: str, namespace: str) -> str:
@@ -314,7 +328,7 @@ Answer:"""
                 if groq_available and groq_client is not None:
                     response = await asyncio.to_thread(
                         groq_client.chat.completions.create,
-                        model="llama-3.3-70b-versatile",
+                        model="llama-3.1-8b-instant",  # Lighter model for Q/A
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.5,
                         max_tokens=2000
@@ -403,7 +417,7 @@ Please summarise the following diff file:
 {diff}"""
 
         response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",  # Lighter model
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=500
