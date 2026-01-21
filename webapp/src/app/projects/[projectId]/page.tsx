@@ -26,9 +26,14 @@ type Props = {
 
 const ProjectID = async ({ params: { projectId } }: Props) => {
   const { userId } = await auth();
+
+  if (!userId) {
+    return redirect("/sign-in");
+  }
+
   const user = await db.user.findUnique({
     where: {
-      id: userId ?? "",
+      id: userId,
     },
   });
   if (!user) {

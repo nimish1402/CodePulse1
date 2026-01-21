@@ -7,9 +7,14 @@ import { redirect } from "next/navigation";
 
 export default async function Index() {
   const { userId } = await auth();
+
+  if (!userId) {
+    return redirect("/sign-in");
+  }
+
   const user = await db.user.findUnique({
     where: {
-      id: userId ?? "",
+      id: userId,
     },
   });
   if (!user) {
