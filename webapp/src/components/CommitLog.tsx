@@ -76,6 +76,7 @@ export default function CommitLog({
                   <time
                     dateTime={commit.commitDate.toString()}
                     className="flex-none py-0.5 text-xs leading-5 text-gray-500"
+                    suppressHydrationWarning
                   >
                     {new Date(commit.commitDate).toLocaleString()}
                   </time>

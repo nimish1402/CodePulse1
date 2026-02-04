@@ -26,7 +26,7 @@ try:
     from weaviate.classes.config import Configure, Property, DataType
     
     client = weaviate.connect_to_weaviate_cloud(
-        cluster_url="https://u7qjbxmmtgss410vjv5pa.c0.asia-southeast1.gcp.weaviate.cloud",
+        cluster_url="https://opbbo1qysuwd9s67rowxg.c0.asia-southeast1.gcp.weaviate.cloud",
         auth_credentials=weaviate.auth.AuthApiKey(os.getenv("WEAVIATE_API_KEY")),
     )
     weaviate_available = True
@@ -46,7 +46,10 @@ def ensure_collection_exists(namespace: str):
         return False
     
     try:
-        collection_name = f"CodeDoc_{namespace.replace('-', '_').replace('/', '_')}"
+        # Sanitize namespace to create valid Weaviate collection name
+        # Remove all special characters: :, ., -, /
+        sanitized = namespace.replace(':', '_').replace('.', '_').replace('-', '_').replace('/', '_')
+        collection_name = f"CodeDoc_{sanitized}"
         
         # Check if collection exists
         if client.collections.exists(collection_name):
@@ -82,7 +85,9 @@ async def store_embeddings(documents: list, namespace: str):
         return False
     
     try:
-        collection_name = f"CodeDoc_{namespace.replace('-', '_').replace('/', '_')}"
+        # Sanitize namespace to create valid Weaviate collection name
+        sanitized = namespace.replace(':', '_').replace('.', '_').replace('-', '_').replace('/', '_')
+        collection_name = f"CodeDoc_{sanitized}"
         collection = client.collections.get(collection_name)
         
         # Delete existing documents for this namespace (fresh start)
@@ -120,7 +125,9 @@ async def retrieve_relevant_docs(query: str, namespace: str, limit: int = 5):
         return []
     
     try:
-        collection_name = f"CodeDoc_{namespace.replace('-', '_').replace('/', '_')}"
+        # Sanitize namespace to create valid Weaviate collection name
+        sanitized = namespace.replace(':', '_').replace('.', '_').replace('-', '_').replace('/', '_')
+        collection_name = f"CodeDoc_{sanitized}"
         
         # Check if collection exists
         if not client.collections.exists(collection_name):

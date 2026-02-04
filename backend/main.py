@@ -33,7 +33,17 @@ class AskRequest(BaseModel):
 
 
 def serialise_github_url(url):
-    return url.replace("/", "_")
+    """
+    Sanitize GitHub URL to create a valid Weaviate collection name.
+    Weaviate collection names must:
+    - Start with uppercase letter
+    - Contain only alphanumeric and underscores
+    - No special chars like :, ., -, /
+    """
+    # Replace all special characters with underscores
+    sanitized = url.replace("https://", "").replace("http://", "")
+    sanitized = sanitized.replace("/", "_").replace(":", "_").replace(".", "_").replace("-", "_")
+    return sanitized
 
 
 def generate_file_tree_graph(file_tree):
