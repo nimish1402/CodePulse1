@@ -15,8 +15,9 @@ ipynb
 webpack
 # database
 node_modules
-/prisma/db.sqlite
-/prisma/db.sqlite-journal
+*.sqlite
+*.sqlite-journal
+bun.lockb
 
 # next.js
 /.next/
