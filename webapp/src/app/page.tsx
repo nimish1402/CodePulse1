@@ -46,8 +46,13 @@ export default async function Index() {
     } else {
       return redirect("/projects/" + projects[0]!.id);
     }
-  } catch (error) {
-    // Handle database connection errors gracefully
+  } catch (error: any) {
+    // Check if this is a Next.js redirect (not an actual error)
+    if (error?.digest?.startsWith('NEXT_REDIRECT')) {
+      throw error; // Re-throw redirects
+    }
+
+    // Handle actual database connection errors gracefully
     console.error("Database error in Index page:", error);
     return (
       <div className="flex flex-col items-center justify-center min-h-screen p-8">

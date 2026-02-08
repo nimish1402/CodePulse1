@@ -118,7 +118,11 @@ const ProjectID = async ({ params: { projectId } }: Props) => {
         )}
       </>
     );
-  } catch (error) {
+  } catch (error: any) {
+    // Check if this is a Next.js redirect (not an actual error)
+    if (error?.digest?.startsWith('NEXT_REDIRECT') || error?.digest?.startsWith('NEXT_NOT_FOUND')) {
+      throw error; // Re-throw redirects and not found errors
+    }
     console.error("Database error in ProjectID page:", error);
     return (
       <div className="flex items-center justify-center min-h-[400px]">

@@ -36,7 +36,11 @@ const DocumentationPage = async ({ params: { projectId } }: Props) => {
         </div>
       </>
     );
-  } catch (error) {
+  } catch (error: any) {
+    // Check if this is a Next.js redirect (not an actual error)
+    if (error?.digest?.startsWith('NEXT_REDIRECT') || error?.digest?.startsWith('NEXT_NOT_FOUND')) {
+      throw error; // Re-throw redirects and not found errors
+    }
     console.error("Database error in Documentation page:", error);
     return (
       <div className="flex items-center justify-center min-h-[400px]">
