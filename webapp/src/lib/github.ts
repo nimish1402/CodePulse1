@@ -3,6 +3,12 @@ import axios from "axios";
 import { Octokit } from "octokit";
 
 const octokit = new Octokit({ auth: process.env.GITHUB_PERSONAL_ACCESS_TOKEN });
+
+// Helper to normalize backend URL and remove trailing slashes
+const getBackendUrl = (path: string) => {
+  const baseUrl = process.env.PYTHON_AI_BACKEND_URL?.replace(/\/+$/, '') || '';
+  return `${baseUrl}${path}`;
+};
 // id                 String   @id @default(cuid())
 // commitMessage      String
 // commitHash         String
@@ -55,7 +61,7 @@ export const pollRepo = async (githubUrl: string, projectId: string) => {
   const summariesResponse = await Promise.allSettled(
     unprocessedCommits.map((hash) => {
       return axios.post(
-        `${process.env.PYTHON_AI_BACKEND_URL}/summarise-commit`,
+        getBackendUrl('/summarise-commit'),
         {
           github_url: githubUrl,
           commitHash: hash.commitHash,

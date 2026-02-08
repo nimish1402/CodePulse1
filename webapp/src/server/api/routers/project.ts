@@ -6,6 +6,12 @@ import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { pollRepo } from "@/lib/github";
 
+// Helper to normalize backend URL and remove trailing slashes
+const getBackendUrl = (path: string) => {
+  const baseUrl = process.env.PYTHON_AI_BACKEND_URL?.replace(/\/+$/, '') || '';
+  return `${baseUrl}${path}`;
+};
+
 export const projectRouter = createTRPCRouter({
   createProject: protectedProcedure
     .input(
@@ -55,7 +61,7 @@ export const projectRouter = createTRPCRouter({
       }
       const [response] = await Promise.all([
         axios.post(
-          `${process.env.PYTHON_AI_BACKEND_URL}/generate_documentation`,
+          getBackendUrl('/generate_documentation'),
           {
             github_url: input.githubUrl,
           },
@@ -120,7 +126,7 @@ export const projectRouter = createTRPCRouter({
         });
       }
       const { data } = await axios.post(
-        `${process.env.PYTHON_AI_BACKEND_URL}/ask`,
+        getBackendUrl('/ask'),
         {
           github_url: project.githubUrl,
           query: input.question,
@@ -198,7 +204,7 @@ export const projectRouter = createTRPCRouter({
         });
       }
       const { data } = await axios.post(
-        `${process.env.PYTHON_AI_BACKEND_URL}/transcribe-meeting`,
+        getBackendUrl('/transcribe-meeting'),
         {
           url: input.audio_url,
         },
@@ -266,7 +272,7 @@ export const projectRouter = createTRPCRouter({
       }
 
       const { data } = await axios.post(
-        `${process.env.PYTHON_AI_BACKEND_URL}/ask-meeting`,
+        getBackendUrl('/ask-meeting'),
         {
           url: issue.meeting.url,
           quote: issue.summary,
