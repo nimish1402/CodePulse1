@@ -20,6 +20,12 @@ except Exception as e:
     groq_available = False
     groq_client = None
 
+# Request queue to prevent rate limiting
+# Limit concurrent Groq requests to avoid hitting 6000 TPM limit
+groq_semaphore = asyncio.Semaphore(2)  # Max 2 concurrent requests
+groq_request_queue = asyncio.Queue()
+
+
 # Initialize Weaviate client
 try:
     import weaviate
@@ -197,6 +203,7 @@ async def getEmbeddings(text: str) -> List[float]:
 async def getSummary(source: str, code: str) -> str:
     """
     Generate a summary of the code file using Groq (for documentation)
+    Uses semaphore to prevent rate limiting
     """
     print("getting summary for", source)
     if len(code) > 10000:
@@ -210,7 +217,9 @@ async def getSummary(source: str, code: str) -> str:
             if not groq_available or groq_client is None:
                 raise Exception("Groq not available")
             
-            prompt = f"""You are an intelligent senior software engineer who specialise in onboarding junior software engineers onto projects.
+            # Use semaphore to limit concurrent requests
+            async with groq_semaphore:
+                prompt = f"""You are an intelligent senior software engineer who specialise in onboarding junior software engineers onto projects.
 
 You are onboarding a junior software engineer and explaining to them the purpose of the {source} file
 here is the code:
@@ -219,29 +228,38 @@ here is the code:
 ---
 give a summary no more than 100 words of the code above"""
 
-            response = await asyncio.to_thread(
-                groq_client.chat.completions.create,
-                model="llama-3.1-8b-instant",  # Lighter, faster model
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=150
-            )
-            
-            print("got back summary from Groq", source)
-            return response.choices[0].message.content
+                response = await asyncio.to_thread(
+                    groq_client.chat.completions.create,
+                    model="llama-3.1-8b-instant",  # Lighter, faster model
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=150
+                )
+                
+                print("got back summary from Groq", source)
+                return response.choices[0].message.content
             
         except Exception as e:
             error_str = str(e)
             if "rate_limit" in error_str.lower() or "429" in error_str:
                 if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2 ** attempt)
-                    print(f"⚠️ Rate limit for {source}, retrying in {wait_time}s...")
+                    # Try to extract wait time from error message
+                    # Error format: "Please try again in 18.24s"
+                    import re
+                    match = re.search(r'try again in ([\d.]+)s', error_str)
+                    if match:
+                        wait_time = float(match.group(1)) + 1  # Add 1s buffer
+                    else:
+                        wait_time = retry_delay * (2 ** attempt)
+                    
+                    print(f"⚠️ Rate limit for {source}, retrying in {wait_time:.1f}s...")
                     await asyncio.sleep(wait_time)
                     continue
             print(f"Error getting summary for {source}: {e}")
             return f"Unable to generate summary for {source}"
     
     return f"Unable to generate summary for {source}"
+
 
 
 async def ask(query: str, namespace: str) -> str:
@@ -333,13 +351,15 @@ Answer:"""
             if "quota" in error_str.lower() or "429" in error_str:
                 print("⚠️ Gemini quota exceeded, falling back to Groq")
                 if groq_available and groq_client is not None:
-                    response = await asyncio.to_thread(
-                        groq_client.chat.completions.create,
-                        model="llama-3.1-8b-instant",  # Lighter model for Q/A
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.5,
-                        max_tokens=2000
-                    )
+                    # Use semaphore to prevent rate limiting on Groq failsafe
+                    async with groq_semaphore:
+                        response = await asyncio.to_thread(
+                            groq_client.chat.completions.create,
+                            model="llama-3.1-8b-instant",  # Lighter model for Q/A
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.5,
+                            max_tokens=2000
+                        )
                     print("Got back answer from Groq (failsafe)")
                     # Add a note that Groq was used
                     groq_answer = response.choices[0].message.content
