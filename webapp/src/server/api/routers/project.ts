@@ -223,16 +223,20 @@ export const projectRouter = createTRPCRouter({
           url: input.audio_url,
         },
       });
-      await ctx.db.issue.createMany({
-        data: summaries.map((summary) => ({
-          start: summary.start,
-          end: summary.end,
-          gist: summary.gist,
-          headline: summary.headline,
-          summary: summary.summary,
-          meetingId: meeting.id,
-        })),
-      });
+      await Promise.all(
+        summaries.map((summary) =>
+          ctx.db.issue.create({
+            data: {
+              start: summary.start,
+              end: summary.end,
+              gist: summary.gist,
+              headline: summary.headline,
+              summary: summary.summary,
+              meetingId: meeting.id,
+            },
+          }),
+        ),
+      );
 
       return { meetingId: meeting.id };
     }),
@@ -313,8 +317,14 @@ export const projectRouter = createTRPCRouter({
       });
       const avatars = await Promise.all(
         users.map(async (user) => {
-          const clerkUser = await clerkClient.users.getUser(user.id);
-          return clerkUser.imageUrl;
+          try {
+            const clerkUser = await clerkClient.users.getUser(user.id);
+            return clerkUser.imageUrl;
+          } catch (error) {
+            console.error(`Failed to fetch avatar for user ${user.id}:`, error);
+            // Return a default avatar URL if Clerk API fails
+            return `https://api.dicebear.com/7.x/initials/svg?seed=${user.name}`;
+          }
         }),
       );
       return avatars;
